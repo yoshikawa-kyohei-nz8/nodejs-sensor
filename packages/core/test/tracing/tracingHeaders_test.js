@@ -158,7 +158,26 @@ describe('tracing/headers', () => {
     });
   });
 
-  it('should read W3C trace context headers without an in key-value pair', () => {
+  it('should use W3C traceparent IDs if X-INSTANA- is missing and there is no tracestate header', () => {
+    const context = tracingHeaders.fromHttpRequest({
+      headers: {
+        traceparent: traceParent
+      }
+    });
+
+    expect(context).to.be.an('object');
+    expect(context.traceId).to.equal(foreignTraceId);
+    expect(context.parentId).to.equal(foreignParentId);
+    const w3cTraceContext = context.w3cTraceContext;
+    expect(w3cTraceContext).to.be.an('object');
+    expect(w3cTraceContext.foreignTraceId).to.equal(foreignTraceId);
+    expect(w3cTraceContext.foreignParentId).to.equal(foreignParentId);
+    expect(w3cTraceContext.sampled).to.be.true;
+    expect(w3cTraceContext.instanaTraceId).to.not.exist;
+    expect(w3cTraceContext.instanaParentId).to.not.exist;
+  });
+
+  it('should use W3C traceparent IDs if X-INSTANA- is missing and tracestate s no in key-value pair', () => {
     const context = tracingHeaders.fromHttpRequest({
       headers: {
         traceparent: traceParent,
@@ -167,13 +186,32 @@ describe('tracing/headers', () => {
     });
 
     expect(context).to.be.an('object');
-    expect(context.traceId).to.be.a('string');
-    expect(context.traceId).to.have.lengthOf(16);
-    expect(context.parentId).to.not.exist;
+    expect(context.traceId).to.equal(foreignTraceId);
+    expect(context.parentId).to.equal(foreignParentId);
     const w3cTraceContext = context.w3cTraceContext;
     expect(w3cTraceContext).to.be.an('object');
     expect(w3cTraceContext.foreignTraceId).to.equal(foreignTraceId);
-    expect(context.traceId).to.not.equal(w3cTraceContext.foreignTraceId);
+    expect(w3cTraceContext.foreignParentId).to.equal(foreignParentId);
+    expect(w3cTraceContext.sampled).to.be.true;
+    expect(w3cTraceContext.instanaTraceId).to.not.exist;
+    expect(w3cTraceContext.instanaParentId).to.not.exist;
+  });
+
+  it('should prefer X-INSTANA- over W3C traceparent IDs', () => {
+    const context = tracingHeaders.fromHttpRequest({
+      headers: {
+        'x-instana-t': instana16CharTraceId,
+        'x-instana-s': instanaSpanId,
+        traceparent: traceParent
+      }
+    });
+
+    expect(context).to.be.an('object');
+    expect(context.traceId).to.equal(instana16CharTraceId);
+    expect(context.parentId).to.equal(instanaSpanId);
+    const w3cTraceContext = context.w3cTraceContext;
+    expect(w3cTraceContext).to.be.an('object');
+    expect(w3cTraceContext.foreignTraceId).to.equal(foreignTraceId);
     expect(w3cTraceContext.foreignParentId).to.equal(foreignParentId);
     expect(w3cTraceContext.sampled).to.be.true;
     expect(w3cTraceContext.instanaTraceId).to.not.exist;
@@ -272,9 +310,13 @@ describe('tracing/headers', () => {
 
   [true, false].forEach(withInstanaHeaders =>
     [false, '1', '0'].forEach(withInstanaLevel =>
-      [false, 'without-in', 'in-leftmost', 'in-not-leftmost'].forEach(withSpecHeaders =>
-        registerTest(withInstanaHeaders, withInstanaLevel, withSpecHeaders)
-      )
+      [
+        false,
+        'traceparent-only',
+        'tracestate-without-in',
+        'tracestate-in-left-most',
+        'tracestate-in-not-leftmost'
+      ].forEach(withSpecHeaders => registerTest(withInstanaHeaders, withInstanaLevel, withSpecHeaders))
     )
   );
 
@@ -290,11 +332,13 @@ describe('tracing/headers', () => {
     }
     if (withSpecHeaders !== false) {
       headers.traceparent = traceParent;
-      if (withSpecHeaders === 'without-in') {
+      if (withSpecHeaders === 'traceparent-only') {
+        // nothing to do
+      } else if (withSpecHeaders === 'tracestate-without-in') {
         headers.tracestate = traceStateWithoutInstana;
-      } else if (withSpecHeaders === 'in-leftmost') {
+      } else if (withSpecHeaders === 'tracestate-in-left-most') {
         headers.tracestate = traceStateWithInstanaLeftMostNarrow;
-      } else if (withSpecHeaders === 'in-not-leftmost') {
+      } else if (withSpecHeaders === 'tracestate-in-not-leftmost') {
         headers.tracestate = traceStateWithInstanaNarrow;
       } else {
         throw new Error(`Unknown withSpecHeaders value: ${withSpecHeaders}`);
@@ -319,14 +363,19 @@ describe('tracing/headers', () => {
         // We expect the Instana headers to be respected.
         expect(context.traceId).to.equal(instana16CharTraceId);
         expect(context.parentId).to.equal(instanaSpanId);
-      } else if (withSpecHeaders === false || withSpecHeaders === 'without-in') {
-        // Neither the X-INSTANA- headers nor tracestate yielded a trace ID/parent ID. We expect a trace to be started
-        // with a new, generated trace ID.
+      } else if (withSpecHeaders === false) {
+        // Neither the X-INSTANA- headers, nor traceparent/tracestate yielded a trace ID/parent ID. We expect a trace to
+        // be started with a new, generated trace ID.
         expect(context.traceId).to.be.a('string');
         expect(context.traceId).to.have.lengthOf(16);
         expect(context.traceId).to.not.equal(instana16CharTraceId);
         expect(context.parentId).to.not.exist;
-      } else if (withSpecHeaders === 'in-leftmost' || withSpecHeaders === 'in-not-leftmost') {
+      } else if (withSpecHeaders === 'traceparent-only' || withSpecHeaders === 'tracestate-without-in') {
+        // X-INSTANA- headers did not provide IDs, and neither was there an `in` key-value pair in tracestate. But
+        // there was a traceparent header and we expect the IDs from that header to be used.
+        expect(context.traceId).to.equal(foreignTraceId);
+        expect(context.parentId).to.equal(foreignParentId);
+      } else if (withSpecHeaders === 'tracestate-in-left-most' || withSpecHeaders === 'tracestate-in-not-leftmost') {
         expect(context.traceId).to.equal(instana16CharTraceId);
         expect(context.parentId).to.equal(instanaSpanId);
       } else {
@@ -357,10 +406,15 @@ describe('tracing/headers', () => {
         expect(w3cTraceContext.sampled).to.be.true;
       }
 
-      if (withInstanaHeaders && withInstanaLevel !== '0' && withSpecHeaders !== 'without-in') {
+      if (
+        withInstanaHeaders &&
+        withInstanaLevel !== '0' &&
+        withSpecHeaders !== 'tracestate-without-in' &&
+        withSpecHeaders !== 'traceparent-only'
+      ) {
         expect(w3cTraceContext.instanaTraceId).to.equal(instana16CharTraceId);
         expect(w3cTraceContext.instanaParentId).to.equal(instanaSpanId);
-      } else if (withSpecHeaders === 'in-leftmost' || withSpecHeaders === 'in-not-leftmost') {
+      } else if (withSpecHeaders === 'tracestate-in-left-most' || withSpecHeaders === 'tracestate-in-not-leftmost') {
         expect(w3cTraceContext.instanaTraceId).to.equal(instana16CharTraceId);
         expect(w3cTraceContext.instanaParentId).to.equal(instanaSpanId);
       } else if (withInstanaLevel !== '0' && !withInstanaHeaders && !withSpecHeaders) {
@@ -371,11 +425,15 @@ describe('tracing/headers', () => {
         expect(w3cTraceContext.instanaParentId).to.not.exist;
       }
 
-      if ((!withInstanaHeaders && withSpecHeaders) || withSpecHeaders === 'in-not-leftmost') {
+      if ((!withInstanaHeaders && withSpecHeaders) || withSpecHeaders === 'tracestate-in-not-leftmost') {
         expect(context.foreignParent).to.exist;
         expect(context.foreignParent.t).to.equal(foreignTraceId);
         expect(context.foreignParent.p).to.equal(foreignParentId);
-        expect(context.foreignParent.lts).to.equal('rojo=00f067aa0ba902b7');
+        if (withSpecHeaders !== 'traceparent-only') {
+          expect(context.foreignParent.lts).to.equal('rojo=00f067aa0ba902b7');
+        } else {
+          expect(context.foreignParent.lts).to.not.exist;
+        }
       } else if (withInstanaLevel !== '0') {
         expect(context.foreignParent).to.not.exist;
       }

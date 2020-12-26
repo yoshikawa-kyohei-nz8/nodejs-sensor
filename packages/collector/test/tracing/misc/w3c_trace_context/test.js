@@ -7,7 +7,7 @@ const constants = require('@instana/core').tracing.constants;
 const supportedVersion = require('@instana/core').tracing.supportedVersion;
 const config = require('../../../../../core/test/config');
 const delay = require('../../../../../core/test/test_util/delay');
-const { retryUntilSpansMatch, expectAtLeastOneMatching } = require('../../../../../core/test/test_util');
+const { retryUntilSpansMatch, expectExactlyOneMatching } = require('../../../../../core/test/test_util');
 const ProcessControls = require('../../../test_util/ProcessControls');
 const globalAgent = require('../../../globalAgent');
 
@@ -51,50 +51,64 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
         });
       }));
 
-    // First request to Instana already has spec headers, simulating a (spec) trace in progress. We expect an Instana
-    // trace to be started. We also expect the correct spec headers to be passed downstream by the Instana/ service.
-    // In particular, it should keep the same foreign trace ID it received when passing down spec headers, even though
-    // the Instana trace uses a different one.
+    // First request to Instana already has spec headers, simulating a (spec) trace in progress. We expect the Instana
+    // tracer to respect the incoming IDs and continue the W3C trace. We also expect the correct spec headers to be
+    // passed downstream by the Instana service.
     it('Instana continues a spec trace and passes the correct spec headers downstream', () =>
       startRequest({ app: instanaAppControls, depth: 1, withSpecHeaders: 'valid' }).then(response => {
         const { traceparent, tracestate } = verifySpecHeadersExistOnLastHttpRequest(response);
         return retryUntilSpansMatch(agentControls, spans => {
-          const instanaHttpEntryRoot = verifyHttpEntry(spans, null, '/start', {
-            t: foreignTraceId,
-            p: foreignParentId,
-            lts: 'thing=foo'
-          });
+          const instanaHttpEntryRoot = verifyHttpEntry(
+            spans,
+            {
+              t: foreignTraceId,
+              s: foreignParentId
+            },
+            '/start',
+            {
+              t: foreignTraceId,
+              p: foreignParentId,
+              lts: 'thing=foo'
+            }
+          );
           const instanaHttpExit = verifyHttpExit(spans, instanaHttpEntryRoot, '/end');
 
           const instanaTraceId = instanaHttpEntryRoot.t;
           const instanaExitSpanId = instanaHttpExit.s;
           expect(traceparent).to.match(new RegExp(`00-${foreignTraceId}-${instanaExitSpanId}-01`));
           expect(tracestate).to.match(new RegExp(`in=${instanaTraceId};${instanaExitSpanId}`));
-          expect(instanaTraceId).to.not.equal(foreignTraceId);
+          expect(instanaTraceId).to.equal(foreignTraceId);
         });
       }));
 
     // First request to Instana already has spec headers with sampled=0, simulating a (spec) trace in progress where
-    // the most recent upstream service did not record tracing data. We still expect an Instana trace to be started.
+    // the most recent upstream service did not record tracing data. We still expect Instana to continue the W3C trace
+    // with the W3C trace ID from traceparent (the parent element has not been recorded, but other ancestor elements
+    // might have been recorded).
     // We also expect the correct spec headers to be passed downstream by the Instana service. In particular, it
-    // should keep the same foreign trace ID it received when passing down spec headers, even though the Instana trace
-    // uses a different one.
+    // should keep the same trace ID it received when passing down spec headers.
     it('Instana continues a spec trace with sampled=0', () =>
       startRequest({ app: instanaAppControls, depth: 1, withSpecHeaders: 'not-sampled' }).then(response => {
         const { traceparent, tracestate } = verifySpecHeadersExistOnLastHttpRequest(response);
         return retryUntilSpansMatch(agentControls, spans => {
-          const instanaHttpEntryRoot = verifyHttpEntry(spans, null, '/start', {
-            t: foreignTraceId,
-            p: foreignParentId,
-            lts: 'thing=foo'
-          });
+          const instanaHttpEntryRoot = verifyHttpEntry(
+            spans,
+            {
+              t: foreignTraceId,
+              s: foreignParentId
+            },
+            '/start',
+            {
+              t: foreignTraceId,
+              p: foreignParentId,
+              lts: 'thing=foo'
+            }
+          );
           const instanaHttpExit = verifyHttpExit(spans, instanaHttpEntryRoot, '/end');
 
-          const instanaTraceId = instanaHttpEntryRoot.t;
           const instanaExitSpanId = instanaHttpExit.s;
           expect(traceparent).to.match(new RegExp(`00-${foreignTraceId}-${instanaExitSpanId}-01`));
-          expect(tracestate).to.match(new RegExp(`in=${instanaTraceId};${instanaExitSpanId}`));
-          expect(instanaTraceId).to.not.equal(foreignTraceId);
+          expect(tracestate).to.match(new RegExp(`in=${foreignTraceId};${instanaExitSpanId}`));
         });
       }));
 
@@ -122,11 +136,19 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
         const { traceparent, tracestate } = verifySpecHeadersExistOnLastHttpRequest(response);
 
         return retryUntilSpansMatch(agentControls, spans => {
-          const instanaHttpEntryRoot = verifyHttpEntry(spans, null, '/start', {
-            t: foreignTraceId,
-            p: foreignParentId,
-            lts: 'thing=foo'
-          });
+          const instanaHttpEntryRoot = verifyHttpEntry(
+            spans,
+            {
+              t: foreignTraceId,
+              s: foreignParentId
+            },
+            '/start',
+            {
+              t: foreignTraceId,
+              p: foreignParentId,
+              lts: 'thing=foo'
+            }
+          );
           const instanaHttpExit = verifyHttpExit(spans, instanaHttpEntryRoot, '/end');
 
           const instanaTraceId = instanaHttpEntryRoot.t;
@@ -136,24 +158,30 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
         });
       }));
 
-    // First request to Instana has a valid traceparent but an invalid tracestate header. We expect the an Instanj
-    // trace to be started but the trace ID from traceparent needs to be propagated.
+    // First request to Instana has a valid traceparent but an invalid tracestate header. We expect the W3C trace to
+    // be continued.
     it('Instana propagates the trace ID from traceparent when tracestate is invalid', () =>
       startRequest({ app: instanaAppControls, depth: 1, withSpecHeaders: 'invalid-tracestate' }).then(response => {
         const { traceparent, tracestate } = verifySpecHeadersExistOnLastHttpRequest(response);
 
         return retryUntilSpansMatch(agentControls, spans => {
-          const instanaHttpEntryRoot = verifyHttpEntry(spans, null, '/start', {
-            t: foreignTraceId,
-            p: foreignParentId
-          });
+          const instanaHttpEntryRoot = verifyHttpEntry(
+            spans,
+            {
+              t: foreignTraceId,
+              s: foreignParentId
+            },
+            '/start',
+            {
+              t: foreignTraceId,
+              p: foreignParentId
+            }
+          );
           const instanaHttpExit = verifyHttpExit(spans, instanaHttpEntryRoot, '/end');
 
-          const instanaTraceId = instanaHttpEntryRoot.t;
           const instanaExitSpanId = instanaHttpExit.s;
           expect(traceparent).to.match(new RegExp(`00-${foreignTraceId}-${instanaExitSpanId}-01`));
-          expect(tracestate).to.match(new RegExp(`in=${instanaTraceId};${instanaExitSpanId}`));
-          expect(instanaTraceId).to.not.equal(foreignTraceId);
+          expect(tracestate).to.match(new RegExp(`in=${foreignTraceId};${instanaExitSpanId}`));
         });
       }));
 
@@ -167,11 +195,11 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           expect(response.instanaHeaders.s).to.not.exist;
           // X-INSTANA-L: 0 is passed down
           expect(response.instanaHeaders.l).to.equal('0');
-          expect(response.w3cTaceContext).to.be.an('object');
-          expect(response.w3cTaceContext.receivedHeaders).to.be.an('object');
-          const traceparent = response.w3cTaceContext.receivedHeaders.traceparent;
+          expect(response.w3cTraceContext).to.be.an('object');
+          expect(response.w3cTraceContext.receivedHeaders).to.be.an('object');
+          const traceparent = response.w3cTraceContext.receivedHeaders.traceparent;
           expect(traceparent).to.exist;
-          expect(response.w3cTaceContext.receivedHeaders.tracestate).to.not.exist;
+          expect(response.w3cTraceContext.receivedHeaders.tracestate).to.not.exist;
           // sampled=0 is passed down
           expect(traceparent).to.match(new RegExp(`00-${LEFT_PAD_16}[0-9a-f]{16}-[0-9a-f]{16}-00`));
         })
@@ -285,10 +313,10 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
             expect(response.instanaHeaders.s).to.not.exist;
             // X-INSTANA-L: 0 is passed down
             expect(response.instanaHeaders.l).to.equal('0');
-            expect(response.w3cTaceContext).to.be.an('object');
-            expect(response.w3cTaceContext.receivedHeaders).to.be.an('object');
-            const traceparent = response.w3cTaceContext.receivedHeaders.traceparent;
-            const tracestate = response.w3cTaceContext.receivedHeaders.tracestate;
+            expect(response.w3cTraceContext).to.be.an('object');
+            expect(response.w3cTraceContext.receivedHeaders).to.be.an('object');
+            const traceparent = response.w3cTraceContext.receivedHeaders.traceparent;
+            const tracestate = response.w3cTraceContext.receivedHeaders.tracestate;
             // given IDs and sampled=0 is passed down
             expect(traceparent).to.match(new RegExp(`00-${foreignTraceId}-${foreignParentId}-00`));
             expect(tracestate).to.equal('thing=foo,bar=baz');
@@ -312,10 +340,10 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
             expect(response.instanaHeaders.s).to.not.exist;
             // X-INSTANA-L: 0 is passed down
             expect(response.instanaHeaders.l).to.equal('0');
-            expect(response.w3cTaceContext).to.be.an('object');
-            expect(response.w3cTaceContext.receivedHeaders).to.be.an('object');
-            const traceparent = response.w3cTaceContext.receivedHeaders.traceparent;
-            const tracestate = response.w3cTaceContext.receivedHeaders.tracestate;
+            expect(response.w3cTraceContext).to.be.an('object');
+            expect(response.w3cTraceContext.receivedHeaders).to.be.an('object');
+            const traceparent = response.w3cTraceContext.receivedHeaders.traceparent;
+            const tracestate = response.w3cTraceContext.receivedHeaders.tracestate;
             // The spec says we must create a new parent ID when updating the sampled flag.
             const traceParentMatch = new RegExp(`00-${foreignTraceId}-([0-9a-f]{16})-00`).exec(traceparent);
             expect(traceParentMatch).to.exist;
@@ -344,10 +372,10 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
               expect(response.instanaHeaders.s).to.not.exist;
               // X-INSTANA-L: 0 is passed down
               expect(response.instanaHeaders.l).to.equal('0');
-              expect(response.w3cTaceContext).to.be.an('object');
-              expect(response.w3cTaceContext.receivedHeaders).to.be.an('object');
-              const traceparent = response.w3cTaceContext.receivedHeaders.traceparent;
-              const tracestate = response.w3cTaceContext.receivedHeaders.tracestate;
+              expect(response.w3cTraceContext).to.be.an('object');
+              expect(response.w3cTraceContext.receivedHeaders).to.be.an('object');
+              const traceparent = response.w3cTraceContext.receivedHeaders.traceparent;
+              const tracestate = response.w3cTraceContext.receivedHeaders.tracestate;
               const traceParentMatch = new RegExp(`00-${LEFT_PAD_16}([0-9a-f]{16})-([0-9a-f]{16})-00`).exec(
                 traceparent
               );
@@ -437,11 +465,12 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
 
     // Instana -> Other -> Instana.
     // The other vendor hard-restarts the trace, that is, it generates a new trace id and parent id for traceparent,
-    // and also discards the received tracestate header around. We do not expect one continuous Instana trace, but
+    // and also discards the received tracestate header. We do not expect one continuous Instana trace, but
     // rather two separate traces.
     it('The trace will break after a detour when the foreign service has hard-restarted the trace', () =>
       startRequest({ app: instanaAppControls, depth: 2, otherMode: 'hard-restart' }).then(response => {
         const { traceparent, tracestate } = verifySpecHeadersExistOnLastHttpRequest(response);
+        const { traceIdFromTraceParent, parentIdFromTraceParent } = extraceIdsFromTraceParent(traceparent);
 
         return retryUntilSpansMatch(agentControls, spans => {
           const instanaHttpEntryRoot = verifyHttpEntry(spans, null, '/start', 'none');
@@ -451,17 +480,24 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           expect(tracestate).to.equal('other=newParentId');
 
           // The W3C trace context that was active during processing the last HTTP entry. This is different from
-          // response.w3cTaceContext.receivedHeaders because we update the trace context (in particular, the parent
+          // response.w3cTraceContext.receivedHeaders because we update the trace context (in particular, the parent
           // ID) after generating the span ID for this HTTP entry.
-          expect(response.w3cTaceContext.active).to.be.an('object');
-          const instanaTraceIdInActiveTraceContext = response.w3cTaceContext.active.instanaTraceId;
-          const instanaParentIdInActiveTraceContext = response.w3cTaceContext.active.instanaParentId;
+          expect(response.w3cTraceContext.active).to.be.an('object');
+          const instanaTraceIdInActiveTraceContext = response.w3cTraceContext.active.instanaTraceId;
+          const instanaParentIdInActiveTraceContext = response.w3cTraceContext.active.instanaParentId;
           expect(instanaTraceIdInActiveTraceContext).to.exist;
           expect(instanaParentIdInActiveTraceContext).to.exist;
 
           // Find the span for last HTTP entry in to the Instana-instrumented process.
           // In this case, the terminal HTTP entry span is not part of the same trace.
-          const terminalHttpEntry = verifyHttpEntry(spans, null, '/end');
+          const terminalHttpEntry = verifyHttpEntry(
+            spans,
+            {
+              t: traceIdFromTraceParent,
+              s: parentIdFromTraceParent
+            },
+            '/end'
+          );
 
           expect(instanaTraceIdInActiveTraceContext).to.not.equal(instanaTraceId);
           // The span ID we put into the in key-value pair in the active trace context must equal the span ID on the
@@ -469,7 +505,6 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const instanaEntrySpanId = terminalHttpEntry.s;
           expect(instanaParentIdInActiveTraceContext).to.equal(instanaEntrySpanId);
 
-          const { traceIdFromTraceParent, parentIdFromTraceParent } = extraceIdsFromTraceParent(traceparent);
           expect(traceIdFromTraceParent).not.contains(instanaTraceId);
           verifyForeignParentContext(terminalHttpEntry, parentIdFromTraceParent, instanaTraceId, 'other=newParentId');
         });
@@ -477,8 +512,8 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
 
     it('the trace will break after a detour when the foreign service does not implement W3C trace context', () =>
       startRequest({ app: instanaAppControls, depth: 2, otherMode: 'non-compliant' }).then(response => {
-        expect(response.w3cTaceContext).to.be.an('object');
-        expect(response.w3cTaceContext.receivedHeaders).to.deep.equal({});
+        expect(response.w3cTraceContext).to.be.an('object');
+        expect(response.w3cTraceContext.receivedHeaders).to.deep.equal({});
 
         return retryUntilSpansMatch(agentControls, spans => {
           const instanaHttpEntryRoot = verifyHttpEntry(spans, null, '/start', 'none');
@@ -487,11 +522,11 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const instanaTraceId = instanaHttpEntryRoot.t;
 
           // The W3C trace context that was active during processing the last HTTP entry. This is different from
-          // response.w3cTaceContext.receivedHeaders because we update the trace context (in particular, the parent
+          // response.w3cTraceContext.receivedHeaders because we update the trace context (in particular, the parent
           // ID) after generating the span ID for this HTTP entry.
-          expect(response.w3cTaceContext.active).to.be.an('object');
-          const instanaTraceIdInActiveTraceContext = response.w3cTaceContext.active.instanaTraceId;
-          const instanaParentIdInActiveTraceContext = response.w3cTaceContext.active.instanaParentId;
+          expect(response.w3cTraceContext.active).to.be.an('object');
+          const instanaTraceIdInActiveTraceContext = response.w3cTraceContext.active.instanaTraceId;
+          const instanaParentIdInActiveTraceContext = response.w3cTraceContext.active.instanaParentId;
           expect(instanaTraceIdInActiveTraceContext).to.exist;
           expect(instanaParentIdInActiveTraceContext).to.exist;
 
@@ -514,12 +549,19 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
         retryUntilSpansMatch(agentControls, spans => {
           const { traceparent } = verifySpecHeadersExistOnLastHttpRequest(response);
           const { traceIdFromTraceParent, parentIdFromTraceParent } = extraceIdsFromTraceParent(traceparent);
-          const instanaHttpEntryRoot = verifyHttpEntry(spans, null, '/end');
+          const instanaHttpEntryRoot = verifyHttpEntry(
+            spans,
+            {
+              t: traceIdFromTraceParent,
+              s: parentIdFromTraceParent
+            },
+            '/end'
+          );
           expect(instanaHttpEntryRoot.fp).to.be.an('object');
           expect(instanaHttpEntryRoot.fp.t).to.equal(traceIdFromTraceParent);
-          expect(instanaHttpEntryRoot.fp.t).to.not.contain(instanaHttpEntryRoot.t);
+          expect(instanaHttpEntryRoot.fp.t).to.equal(instanaHttpEntryRoot.t);
           expect(instanaHttpEntryRoot.fp.p).to.equal(parentIdFromTraceParent);
-          expect(instanaHttpEntryRoot.fp.p).to.not.equal(instanaHttpEntryRoot.s);
+          expect(instanaHttpEntryRoot.fp.p).to.equal(instanaHttpEntryRoot.p);
           expect(instanaHttpEntryRoot.fp.lts).to.equal('other=newParentId');
         })
       ));
@@ -532,7 +574,15 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const { traceparent, tracestate } = verifySpecHeadersExistOnLastHttpRequest(response);
           const { traceIdFromTraceParent } = extraceIdsFromTraceParent(traceparent);
 
-          const instanaHttpEntryRoot = verifyHttpEntry(spans, null, '/continue');
+          const instanaHttpEntryRoot = verifyHttpEntry(
+            spans,
+            {
+              t: traceIdFromTraceParent,
+              s: '?'
+            },
+            '/continue'
+          );
+          expect(instanaHttpEntryRoot.t).to.equal(traceIdFromTraceParent);
           expect(instanaHttpEntryRoot.fp.t).to.equal(traceIdFromTraceParent);
           expect(instanaHttpEntryRoot.fp.lts).to.equal('other=newParentId');
 
@@ -630,10 +680,10 @@ function startRequest({ app, depth = 2, withSpecHeaders = null, otherMode = 'par
  * the chain.
  */
 function verifySpecHeadersExistOnLastHttpRequest(response) {
-  expect(response.w3cTaceContext).to.be.an('object');
-  expect(response.w3cTaceContext.receivedHeaders).to.be.an('object');
-  const traceparent = response.w3cTaceContext.receivedHeaders.traceparent;
-  const tracestate = response.w3cTaceContext.receivedHeaders.tracestate;
+  expect(response.w3cTraceContext).to.be.an('object');
+  expect(response.w3cTraceContext.receivedHeaders).to.be.an('object');
+  const traceparent = response.w3cTraceContext.receivedHeaders.traceparent;
+  const tracestate = response.w3cTraceContext.receivedHeaders.tracestate;
   expect(traceparent).to.exist;
   expect(tracestate).to.exist;
   return { traceparent, tracestate };
@@ -653,14 +703,14 @@ function verifyTraceContextAgainstTerminalSpan(
   restart
 ) {
   // The incoming HTTP headers for the last request.
-  const traceparent = response.w3cTaceContext.receivedHeaders.traceparent;
+  const traceparent = response.w3cTraceContext.receivedHeaders.traceparent;
 
   // The W3C trace context that was active during processing the last HTTP entry. This is different from
-  // response.w3cTaceContext.receivedHeaders because we update the trace context (in particular, the parent ID) after
+  // response.w3cTraceContext.receivedHeaders because we update the trace context (in particular, the parent ID) after
   // generating the span ID for this HTTP entry.
-  expect(response.w3cTaceContext.active).to.be.an('object');
-  const instanaTraceIdInActiveTraceContext = response.w3cTaceContext.active.instanaTraceId;
-  const instanaParentIdInActiveTraceContext = response.w3cTaceContext.active.instanaParentId;
+  expect(response.w3cTraceContext.active).to.be.an('object');
+  const instanaTraceIdInActiveTraceContext = response.w3cTraceContext.active.instanaTraceId;
+  const instanaParentIdInActiveTraceContext = response.w3cTraceContext.active.instanaParentId;
   expect(instanaTraceIdInActiveTraceContext).to.exist;
   expect(instanaParentIdInActiveTraceContext).to.exist;
 
@@ -713,35 +763,39 @@ function extraceIdsFromTraceParent(traceparent) {
 }
 
 function verifyHttpEntry(spans, parentSpan, url, foreignParent) {
-  return expectAtLeastOneMatching(spans, span => {
-    expect(span.n).to.equal('node.http.server');
-    expect(span.k).to.equal(constants.ENTRY);
-    expect(span.async).to.not.exist;
-    expect(span.error).to.not.exist;
-    expect(span.ec).to.equal(0);
-    expect(span.t).to.be.a('string');
-    expect(span.s).to.be.a('string');
-    if (parentSpan) {
-      expect(span.t).to.equal(parentSpan.t);
-      expect(span.p).to.equal(parentSpan.s);
-    } else {
-      expect(span.p).to.not.exist;
-    }
-    expect(span.data.http.method).to.equal('GET');
-    expect(span.data.http.url).to.equal(url);
-    expect(span.data.http.host).to.equal(`localhost:${instanaAppPort}`);
-    expect(span.data.http.status).to.equal(200);
+  const expectations = [
+    span => expect(span.n).to.equal('node.http.server'),
+    span => expect(span.k).to.equal(constants.ENTRY),
+    span => expect(span.async).to.not.exist,
+    span => expect(span.error).to.not.exist,
+    span => expect(span.ec).to.equal(0),
+    span => expect(span.t).to.be.a('string'),
+    span => expect(span.s).to.be.a('string'),
+    span => expect(span.data.http.method).to.equal('GET'),
+    span => expect(span.data.http.url).to.equal(url),
+    span => expect(span.data.http.host).to.equal(`localhost:${instanaAppPort}`),
+    span => expect(span.data.http.status).to.equal(200)
+  ];
 
-    if (typeof foreignParent === 'object') {
-      expect(span.fp).to.deep.equal(foreignParent);
-    } else if (foreignParent === 'none') {
-      expect(span.fp).to.not.exist;
+  if (parentSpan) {
+    expectations.push(span => expect(span.t).to.equal(parentSpan.t));
+    if (parentSpan.s !== '?') {
+      expectations.push(span => expect(span.p).to.equal(parentSpan.s));
     }
-  });
+  } else {
+    expectations.push(span => expect(span.p).to.not.exist);
+  }
+  if (typeof foreignParent === 'object') {
+    expectations.push(span => expect(span.fp).to.deep.equal(foreignParent));
+  } else if (foreignParent === 'none') {
+    expectations.push(span => expect(span.fp).to.not.exist);
+  }
+
+  return expectExactlyOneMatching(spans, expectations);
 }
 
 function verifyHttpExit(spans, parentSpan, url) {
-  return expectAtLeastOneMatching(spans, [
+  return expectExactlyOneMatching(spans, [
     span => expect(span.n).to.equal('node.http.client'),
     span => expect(span.k).to.equal(constants.EXIT),
     span => expect(span.async).to.not.exist,

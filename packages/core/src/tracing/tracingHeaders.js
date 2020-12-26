@@ -95,14 +95,14 @@ exports.fromHeaders = function fromHeaders(headers) {
         }
       };
     } else {
-      // The W3C tracestate header has no in key-value pair. We start a new Instana trace by generating a trace ID,
-      // at the same time, we keep the W3C trace context we received intact and will propagate it further.
+      // The W3C tracestate header has no in key-value pair. As of 2021-01, we use the IDs from traceparent (previously,
+      // we started a new Instana trace by generating a trace ID).
       // The w3cTraceContext has no instanaTraceId/instanaParentId yet, it will get one as soon as we start a span
       // and upate it. In case we received X-INSTANA-L: 0 we will not start a span, but we will make sure to toggle the
       // sampled flag in traceparent off.
       return {
-        traceId: !isSuppressed(level) ? tracingUtil.generateRandomTraceId() : null,
-        parentId: null,
+        traceId: !isSuppressed(level) ? w3cTraceContext.foreignTraceId : null,
+        parentId: !isSuppressed(level) ? w3cTraceContext.foreignParentId : null,
         level,
         correlationType,
         correlationId,

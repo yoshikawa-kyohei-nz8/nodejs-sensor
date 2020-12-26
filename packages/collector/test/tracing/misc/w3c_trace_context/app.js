@@ -149,7 +149,7 @@ server.on('request', (req, res) => {
       return endWithStatus(req, res, 405);
     }
     const payload = {
-      w3cTaceContext: {
+      w3cTraceContext: {
         receivedHeaders: {
           traceparent: incomingHeaders.traceparent,
           tracestate: incomingHeaders.tracestate
@@ -166,7 +166,7 @@ server.on('request', (req, res) => {
     if (isInstana()) {
       const activeW3cTraceContext = cls.getW3cTraceContext();
       if (activeW3cTraceContext) {
-        payload.w3cTaceContext.active = {
+        payload.w3cTraceContext.active = {
           instanaTraceId: activeW3cTraceContext.instanaTraceId,
           instanaParentId: activeW3cTraceContext.instanaParentId
         };
