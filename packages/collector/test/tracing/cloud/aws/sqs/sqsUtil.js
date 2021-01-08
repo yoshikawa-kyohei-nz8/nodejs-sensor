@@ -3,7 +3,8 @@ const AWS = require('aws-sdk');
 AWS.config.update({ region: 'us-east-2' });
 
 const sqs = new AWS.SQS({ apiVersion: '2012-11-05' });
-// const queueURL = process.env.AWS_SQS_QUEUE_URL;
+
+exports.sqs = sqs;
 
 /**
  * @param {string} queueURL The AWS SQS Queue URL
