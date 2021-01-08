@@ -7,7 +7,7 @@ const express = require('express');
 // const morgan = require('morgan');
 // const request = require('request-promise');
 // const asyncRoute = require('../../../../test_util/asyncExpressRoute');
-const { receiveMessages, sqs } = require('./sqsUtil');
+const { sqs } = require('./sqsUtil');
 
 const queueURL = process.env.AWS_SQS_QUEUE_URL;
 
@@ -24,7 +24,7 @@ const receiveParams = {
   AttributeNames: [
     'SentTimestamp'
   ],
-  MaxNumberOfMessages: 10,
+  MaxNumberOfMessages: 1,
   MessageAttributeNames: [
     'All'
   ],
@@ -32,7 +32,6 @@ const receiveParams = {
   VisibilityTimeout: 20,
   WaitTimeSeconds: 0
 };
-
 
 function log() {
   /* eslint-disable no-console */
@@ -63,7 +62,7 @@ app.get('/receive-callback', (_req, res) => {
         if (err) {
           return res.status(501).send({
             status: 'ERROR',
-            data: err
+            data: String(err)
           });
         }
       });
@@ -74,22 +73,32 @@ app.get('/receive-callback', (_req, res) => {
       data: messagesData
     });
   });
-
 });
 
+app.get('/receive-promise', async (_req, res) => {
 
-app.get('/receivemessages', async (_req, res) => {
   try {
-    const data = await receiveMessages(queueURL);
+    const data = await sqs.receiveMessage(receiveParams).promise();
+
+    if (data.Messages) {
+      const deleteParams = {
+        QueueUrl: queueURL,
+        ReceiptHandle: data.Messages[0].ReceiptHandle
+      };
+
+      await sqs.deleteMessage(deleteParams).promise();
+    }
+
     res.send({
       status: 'OK',
-      data: data
+      data
     });
-  } catch (err) {
-    log('Error receiving messages', err);
-    res.status(501).send({
+
+  } catch(err) {
+    console.log('vem aki', err);
+    return res.status(501).send({
       status: 'ERROR',
-      data: err
+      data: String(err)
     });
   }
 });

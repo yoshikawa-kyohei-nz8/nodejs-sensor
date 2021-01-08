@@ -10,9 +10,9 @@ const express = require('express');
 // const request = require('request-promise');
 
 // const asyncRoute = require('../../../../test_util/asyncExpressRoute');
-const { sendMessage, sqs } = require('./sqsUtil');
+const { sqs } = require('./sqsUtil');
 const queueURL = process.env.AWS_SQS_QUEUE_URL;
-const port = process.env.APP_PORT || 3216;
+const port = process.env.APP_PORT || 3215;
 const logPrefix = `AWS SQS Message Sender (${process.pid}):\t`;
 
 const app = express();
@@ -31,40 +31,42 @@ app.get('/', (_req, res) => {
 });
 
 app.post('/send-callback', (_req, res) => {
-  const params = {
+  const sendParams = {
     MessageBody: 'message sent via callback function',
     QueueUrl: queueURL
   };
-
-  sqs.sendMessage(params, (err, data) => {
+  
+  sqs.sendMessage(sendParams, (err, data) => {
     if (err) {
       res.status(501).send({
         status: 'ERROR',
-        data: err
-      });  
+        data: String(err)
+      });
     } else {
       res.send({
         status: 'OK',
         data
-      });  
+      });
     }
   });
 });
 
+app.post('/send-promise', async (_req, res) => {
+  const sendParams = {
+    MessageBody: 'message sent via promise',
+    QueueUrl: queueURL
+  };
 
-
-app.post('/sendmessage', async (req, res) => {
   try {
-    const data = await sendMessage(queueURL, 'test message from standalone nodejs app');
+    const data = await sqs.sendMessage(sendParams).promise();
     res.send({
       status: 'OK',
-      data: data
+      data
     });
-  } catch (err) {
-    log('Error sending message', err);
+  } catch(err) {
     res.status(501).send({
       status: 'ERROR',
-      data: err
+      data: String(err)
     });
   }
 });
@@ -72,4 +74,3 @@ app.post('/sendmessage', async (req, res) => {
 app.listen(port, () => {
   log(`Listening on port: ${port}`);
 });
-

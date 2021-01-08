@@ -66,3 +66,19 @@ exports.receiveMessages = function receiveMessages(queueURL) {
     });
   });
 };
+
+
+// (async () => {
+//   const queueURL = process.env.AWS_SQS_QUEUE_URL;
+//   const params = {
+//     MessageBody: 'test - sendMessage as promise',
+//     QueueUrl: queueURL
+//   };
+  
+//   try {
+//     const data = await sqs.sendMessage(params).promise();
+//     console.log('send message as promise ok!', data);
+//   } catch(err) {
+//     console.log('send message as promise failed', err);
+//   }
+// })();
