@@ -6,13 +6,17 @@ const { fail } = expect;
 const tracingHeaders = require('../../src/tracing/tracingHeaders');
 
 // X-INSTANA- values
-const instana32CharTraceId = '0123456789abcdeffedcbc9876543210';
 const instana16CharTraceId = '0123456789abcdef';
+const instana32CharTraceIdLeftHalf = 'a0b1c2d3e4f56789';
+const instana32CharTraceIdRightHalf = '98765f4e3d2c1b0a';
+const instana32CharTraceId = `${instana32CharTraceIdLeftHalf}${instana32CharTraceIdRightHalf}`;
 const instanaSpanId = '02468acefdb97531';
 
 // W3C trace context values
 const version00 = '00';
-const foreignTraceId = '0af7651916cd43dd8448eb211c80319c';
+const foreignTraceIdLeftHalf = '0af7651916cd43dd';
+const foreignTraceIdRightHalf = '8448eb211c80319c';
+const foreignTraceId = `${foreignTraceIdLeftHalf}${foreignTraceIdRightHalf}`;
 const foreignParentId = 'b7ad6b7169203331';
 const flags = '01';
 const traceParent = `${version00}-${foreignTraceId}-${foreignParentId}-${flags}`;
@@ -27,13 +31,26 @@ describe('tracing/headers', () => {
   it('should read X-INSTANA- headers', () => {
     const context = tracingHeaders.fromHttpRequest({
       headers: {
+        'x-instana-t': instana16CharTraceId,
+        'x-instana-s': instanaSpanId
+      }
+    });
+
+    expect(context).to.be.an('object');
+    expect(context.traceId).to.equal(instana16CharTraceId);
+    expect(context.parentId).to.equal(instanaSpanId);
+  });
+
+  it('should read 128 bit X-INSTANA-T and limit it to 64 bit', () => {
+    const context = tracingHeaders.fromHttpRequest({
+      headers: {
         'x-instana-t': instana32CharTraceId,
         'x-instana-s': instanaSpanId
       }
     });
 
     expect(context).to.be.an('object');
-    expect(context.traceId).to.equal(instana32CharTraceId);
+    expect(context.traceId).to.equal(instana32CharTraceIdRightHalf);
     expect(context.parentId).to.equal(instanaSpanId);
   });
 
@@ -50,6 +67,22 @@ describe('tracing/headers', () => {
     expect(w3cTraceContext.foreignParentId).to.equal(instanaSpanId);
     expect(w3cTraceContext.sampled).to.be.true;
     expect(w3cTraceContext.instanaTraceId).to.equal(instana32CharTraceId);
+    expect(w3cTraceContext.instanaParentId).to.equal(instanaSpanId);
+  });
+
+  it('should use 16 bit X-INSTANA-T to create a new W3C trace context and zero-pad it', () => {
+    const context = tracingHeaders.fromHttpRequest({
+      headers: {
+        'x-instana-t': instana16CharTraceId,
+        'x-instana-s': instanaSpanId
+      }
+    });
+    const w3cTraceContext = context.w3cTraceContext;
+    expect(w3cTraceContext).to.be.an('object');
+    expect(w3cTraceContext.foreignTraceId).to.equal(`0000000000000000${instana16CharTraceId}`);
+    expect(w3cTraceContext.foreignParentId).to.equal(instanaSpanId);
+    expect(w3cTraceContext.sampled).to.be.true;
+    expect(w3cTraceContext.instanaTraceId).to.equal(instana16CharTraceId);
     expect(w3cTraceContext.instanaParentId).to.equal(instanaSpanId);
   });
 
@@ -166,7 +199,7 @@ describe('tracing/headers', () => {
     });
 
     expect(context).to.be.an('object');
-    expect(context.traceId).to.equal(foreignTraceId);
+    expect(context.traceId).to.equal(foreignTraceIdRightHalf);
     expect(context.parentId).to.equal(foreignParentId);
     const w3cTraceContext = context.w3cTraceContext;
     expect(w3cTraceContext).to.be.an('object');
@@ -177,7 +210,7 @@ describe('tracing/headers', () => {
     expect(w3cTraceContext.instanaParentId).to.not.exist;
   });
 
-  it('should use W3C traceparent IDs if X-INSTANA- is missing and tracestate s no in key-value pair', () => {
+  it('should use W3C traceparent IDs if X-INSTANA- is missing and tracestate has no in key-value pair', () => {
     const context = tracingHeaders.fromHttpRequest({
       headers: {
         traceparent: traceParent,
@@ -186,7 +219,7 @@ describe('tracing/headers', () => {
     });
 
     expect(context).to.be.an('object');
-    expect(context.traceId).to.equal(foreignTraceId);
+    expect(context.traceId).to.equal(foreignTraceIdRightHalf);
     expect(context.parentId).to.equal(foreignParentId);
     const w3cTraceContext = context.w3cTraceContext;
     expect(w3cTraceContext).to.be.an('object');
@@ -218,6 +251,27 @@ describe('tracing/headers', () => {
     expect(w3cTraceContext.instanaParentId).to.not.exist;
   });
 
+  it('should prefer X-INSTANA- over W3C traceparent IDs and limit the length', () => {
+    const context = tracingHeaders.fromHttpRequest({
+      headers: {
+        'x-instana-t': instana32CharTraceId,
+        'x-instana-s': instanaSpanId,
+        traceparent: traceParent
+      }
+    });
+
+    expect(context).to.be.an('object');
+    expect(context.traceId).to.equal(instana32CharTraceIdRightHalf);
+    expect(context.parentId).to.equal(instanaSpanId);
+    const w3cTraceContext = context.w3cTraceContext;
+    expect(w3cTraceContext).to.be.an('object');
+    expect(w3cTraceContext.foreignTraceId).to.equal(foreignTraceId);
+    expect(w3cTraceContext.foreignParentId).to.equal(foreignParentId);
+    expect(w3cTraceContext.sampled).to.be.true;
+    expect(w3cTraceContext.instanaTraceId).to.not.exist;
+    expect(w3cTraceContext.instanaParentId).to.not.exist;
+  });
+
   it('should read W3C trace context headers with an in key-value pair (wide)', () => {
     const context = tracingHeaders.fromHttpRequest({
       headers: {
@@ -227,7 +281,7 @@ describe('tracing/headers', () => {
     });
 
     expect(context).to.be.an('object');
-    expect(context.traceId).to.equal(instana32CharTraceId);
+    expect(context.traceId).to.equal(instana32CharTraceIdRightHalf);
     expect(context.parentId).to.equal(instanaSpanId);
     const w3cTraceContext = context.w3cTraceContext;
     expect(w3cTraceContext).to.be.an('object');
@@ -373,7 +427,7 @@ describe('tracing/headers', () => {
       } else if (withSpecHeaders === 'traceparent-only' || withSpecHeaders === 'tracestate-without-in') {
         // X-INSTANA- headers did not provide IDs, and neither was there an `in` key-value pair in tracestate. But
         // there was a traceparent header and we expect the IDs from that header to be used.
-        expect(context.traceId).to.equal(foreignTraceId);
+        expect(context.traceId).to.equal(foreignTraceIdRightHalf);
         expect(context.parentId).to.equal(foreignParentId);
       } else if (withSpecHeaders === 'tracestate-in-left-most' || withSpecHeaders === 'tracestate-in-not-leftmost') {
         expect(context.traceId).to.equal(instana16CharTraceId);

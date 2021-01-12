@@ -16,7 +16,9 @@ const agentControls = globalAgent.instance;
 const instanaAppPort = 4200;
 const otherVendorAppPort = 4201;
 
-const foreignTraceId = 'f0e156789012345678901234567bcdea';
+const foreignTraceIdLeftHalf = 'f0e1567890123456';
+const foreignTraceIdRightHalf = '78901234567bcdea';
+const foreignTraceId = `${foreignTraceIdLeftHalf}${foreignTraceIdRightHalf}`;
 const foreignParentId = '1020304050607080';
 const LEFT_PAD_16 = '0000000000000000';
 const upstreamInstanaTraceId = 'ffeeddccbbaa9988';
@@ -52,8 +54,9 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
       }));
 
     // First request to Instana already has spec headers, simulating a (spec) trace in progress. We expect the Instana
-    // tracer to respect the incoming IDs and continue the W3C trace. We also expect the correct spec headers to be
-    // passed downstream by the Instana service.
+    // tracer to respect the incoming IDs, but limit the trace ID to 64 bit for backwards compatibility with older
+    // Instana tracers. We also expect the Instana tracer to continue the W3C trace. Finally, we expect the correct
+    // spec headers to be passed downstream by the Instana service.
     it('Instana continues a spec trace and passes the correct spec headers downstream', () =>
       startRequest({ app: instanaAppControls, depth: 1, withSpecHeaders: 'valid' }).then(response => {
         const { traceparent, tracestate } = verifySpecHeadersExistOnLastHttpRequest(response);
@@ -61,7 +64,7 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const instanaHttpEntryRoot = verifyHttpEntry(
             spans,
             {
-              t: foreignTraceId,
+              t: foreignTraceIdRightHalf,
               s: foreignParentId
             },
             '/start',
@@ -73,11 +76,9 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           );
           const instanaHttpExit = verifyHttpExit(spans, instanaHttpEntryRoot, '/end');
 
-          const instanaTraceId = instanaHttpEntryRoot.t;
           const instanaExitSpanId = instanaHttpExit.s;
           expect(traceparent).to.match(new RegExp(`00-${foreignTraceId}-${instanaExitSpanId}-01`));
-          expect(tracestate).to.match(new RegExp(`in=${instanaTraceId};${instanaExitSpanId}`));
-          expect(instanaTraceId).to.equal(foreignTraceId);
+          expect(tracestate).to.match(new RegExp(`in=${foreignTraceIdRightHalf};${instanaExitSpanId}`));
         });
       }));
 
@@ -94,7 +95,7 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const instanaHttpEntryRoot = verifyHttpEntry(
             spans,
             {
-              t: foreignTraceId,
+              t: foreignTraceIdRightHalf,
               s: foreignParentId
             },
             '/start',
@@ -108,7 +109,7 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
 
           const instanaExitSpanId = instanaHttpExit.s;
           expect(traceparent).to.match(new RegExp(`00-${foreignTraceId}-${instanaExitSpanId}-01`));
-          expect(tracestate).to.match(new RegExp(`in=${foreignTraceId};${instanaExitSpanId}`));
+          expect(tracestate).to.match(new RegExp(`in=${foreignTraceIdRightHalf};${instanaExitSpanId}`));
         });
       }));
 
@@ -128,7 +129,7 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
         });
       }));
 
-    // First request to Instana has an traceparent header with a newer version than we support.
+    // First request to Instana has a traceparent header with a newer version than we support.
     // We expect the parts of the headers that we understand (in particular, the foreign trace ID from traceparent
     // and the tracestate key-value pairs to be reused.
     it('Instana uses the known parts of the traceparent header when the spec version is newer', () =>
@@ -139,7 +140,7 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const instanaHttpEntryRoot = verifyHttpEntry(
             spans,
             {
-              t: foreignTraceId,
+              t: foreignTraceIdRightHalf,
               s: foreignParentId
             },
             '/start',
@@ -151,10 +152,11 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           );
           const instanaHttpExit = verifyHttpExit(spans, instanaHttpEntryRoot, '/end');
 
-          const instanaTraceId = instanaHttpEntryRoot.t;
           const instanaExitSpanId = instanaHttpExit.s;
           expect(traceparent).to.match(new RegExp(`00-${foreignTraceId}-${instanaExitSpanId}-01`));
-          expect(tracestate).to.match(new RegExp(`in=${instanaTraceId};${instanaExitSpanId},thing=foo,bar=baz`));
+          expect(tracestate).to.match(
+            new RegExp(`in=${foreignTraceIdRightHalf};${instanaExitSpanId},thing=foo,bar=baz`)
+          );
         });
       }));
 
@@ -168,7 +170,7 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const instanaHttpEntryRoot = verifyHttpEntry(
             spans,
             {
-              t: foreignTraceId,
+              t: foreignTraceIdRightHalf,
               s: foreignParentId
             },
             '/start',
@@ -181,7 +183,7 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
 
           const instanaExitSpanId = instanaHttpExit.s;
           expect(traceparent).to.match(new RegExp(`00-${foreignTraceId}-${instanaExitSpanId}-01`));
-          expect(tracestate).to.match(new RegExp(`in=${foreignTraceId};${instanaExitSpanId}`));
+          expect(tracestate).to.match(new RegExp(`in=${foreignTraceIdRightHalf};${instanaExitSpanId}`));
         });
       }));
 
@@ -493,7 +495,7 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const terminalHttpEntry = verifyHttpEntry(
             spans,
             {
-              t: traceIdFromTraceParent,
+              t: traceIdFromTraceParent.substring(16),
               s: parentIdFromTraceParent
             },
             '/end'
@@ -552,14 +554,14 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const instanaHttpEntryRoot = verifyHttpEntry(
             spans,
             {
-              t: traceIdFromTraceParent,
+              t: traceIdFromTraceParent.substring(16),
               s: parentIdFromTraceParent
             },
             '/end'
           );
           expect(instanaHttpEntryRoot.fp).to.be.an('object');
           expect(instanaHttpEntryRoot.fp.t).to.equal(traceIdFromTraceParent);
-          expect(instanaHttpEntryRoot.fp.t).to.equal(instanaHttpEntryRoot.t);
+          expect(instanaHttpEntryRoot.fp.t.substring(16)).to.equal(instanaHttpEntryRoot.t);
           expect(instanaHttpEntryRoot.fp.p).to.equal(parentIdFromTraceParent);
           expect(instanaHttpEntryRoot.fp.p).to.equal(instanaHttpEntryRoot.p);
           expect(instanaHttpEntryRoot.fp.lts).to.equal('other=newParentId');
@@ -577,12 +579,11 @@ mochaSuiteFn('tracing/W3C Trace Context (with processes instrumented by a differ
           const instanaHttpEntryRoot = verifyHttpEntry(
             spans,
             {
-              t: traceIdFromTraceParent,
+              t: traceIdFromTraceParent.substring(16),
               s: '?'
             },
             '/continue'
           );
-          expect(instanaHttpEntryRoot.t).to.equal(traceIdFromTraceParent);
           expect(instanaHttpEntryRoot.fp.t).to.equal(traceIdFromTraceParent);
           expect(instanaHttpEntryRoot.fp.lts).to.equal('other=newParentId');
 
