@@ -38,6 +38,7 @@ app.post('/send-callback', (_req, res) => {
   
   sqs.sendMessage(sendParams, (err, data) => {
     if (err) {
+      console.log(err);
       res.status(501).send({
         status: 'ERROR',
         data: String(err)
@@ -64,12 +65,37 @@ app.post('/send-promise', async (_req, res) => {
       data
     });
   } catch(err) {
+    console.log(err);
     res.status(501).send({
       status: 'ERROR',
       data: String(err)
     });
   }
 });
+
+
+app.post('/send-promise2', async (_req, res) => {
+  const sendParams = {
+    MessageBody: 'message sent via promise 2',
+    QueueUrl: queueURL
+  };
+
+  try {
+    const awsRequest = sqs.sendMessage(sendParams, ()=>{});
+    const data = await awsRequest.promise();
+    res.send({
+      status: 'OK',
+      data
+    });
+  } catch(err) {
+    console.log(err);
+    res.status(501).send({
+      status: 'ERROR',
+      data: String(err)
+    });
+  }
+});
+
 
 app.listen(port, () => {
   log(`Listening on port: ${port}`);

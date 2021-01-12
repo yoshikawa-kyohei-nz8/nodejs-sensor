@@ -30,7 +30,7 @@ const receiveParams = {
   ],
   QueueUrl: queueURL,
   VisibilityTimeout: 20,
-  WaitTimeSeconds: 0
+  WaitTimeSeconds: 20
 };
 
 function log() {
@@ -95,7 +95,6 @@ app.get('/receive-promise', async (_req, res) => {
     });
 
   } catch(err) {
-    console.log('vem aki', err);
     return res.status(501).send({
       status: 'ERROR',
       data: String(err)
