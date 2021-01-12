@@ -2,23 +2,9 @@
 
 require('../../../../../')();
 
-const bodyParser = require('body-parser');
-const express = require('express');
-// const morgan = require('morgan');
-// const request = require('request-promise');
-// const asyncRoute = require('../../../../test_util/asyncExpressRoute');
 const { sqs } = require('./sqsUtil');
-
 const queueURL = process.env.AWS_SQS_QUEUE_URL;
-
-// const agentPort = process.env.INSTANA_AGENT_PORT;
-
-const port = process.env.APP_PORT || 3216;
 const logPrefix = `AWS SQS Message Receiver (${process.pid}):\t`;
-
-const app = express();
-
-app.use(bodyParser.json());
 
 const receiveParams = {
   AttributeNames: [
@@ -40,43 +26,11 @@ function log() {
   console.log.apply(console, args);
 }
 
-app.get('/', (_req, res) => {
-  res.send('Ok');
-});
+function prettiefy(jsonObject) {
+  return JSON.stringify(jsonObject, null, '  ');
+}
 
-app.get('/receive-callback', (_req, res) => {
-
-  sqs.receiveMessage(receiveParams, (err, messagesData) => {
-    if (err) {
-      return res.status(501).send({
-        status: 'ERROR',
-        data: err
-      });
-    } else if (messagesData.Messages) {
-      const deleteParams = {
-        QueueUrl: queueURL,
-        ReceiptHandle: messagesData.Messages[0].ReceiptHandle
-      };
-
-      sqs.deleteMessage(deleteParams, (err, _data) => {
-        if (err) {
-          return res.status(501).send({
-            status: 'ERROR',
-            data: String(err)
-          });
-        }
-      });
-    }
-
-    res.send({
-      status: 'OK',
-      data: messagesData
-    });
-  });
-});
-
-app.get('/receive-promise', async (_req, res) => {
-
+async function receivePromise() {
   try {
     const data = await sqs.receiveMessage(receiveParams).promise();
 
@@ -89,19 +43,65 @@ app.get('/receive-promise', async (_req, res) => {
       await sqs.deleteMessage(deleteParams).promise();
     }
 
-    res.send({
-      status: 'OK',
-      data
-    });
+    log(prettiefy({status: 'OK', data}));
 
   } catch(err) {
-    return res.status(501).send({
-      status: 'ERROR',
-      data: String(err)
-    });
+    log(err);
+    return log(prettiefy({status: 'ERROR', data: String(err)}));
   }
-});
+}
 
-app.listen(port, () => {
-  log(`Listening on port: ${port}`);
-});
+function receiveCallback(cb) {
+  sqs.receiveMessage(receiveParams, (err, messagesData) => {
+    if (err) {
+      log(err);
+      cb();
+    } else if (messagesData.Messages) {
+      const deleteParams = {
+        QueueUrl: queueURL,
+        ReceiptHandle: messagesData.Messages[0].ReceiptHandle
+      };
+
+      sqs.deleteMessage(deleteParams, (err, _data) => {
+        if (err) {
+          log(err);
+          cb();
+        } else {
+          log(prettiefy({status: 'OK', data: messagesData}));
+          cb();
+        }
+      });
+    } else {
+      log('No messages found. Restart the polling');
+      cb();
+    }
+  });
+}
+
+const validTypes = ['promise', 'callback'];
+
+async function pollForMessages() {
+  const receivedType = process.argv[2];
+
+  if (!receivedType || !validTypes.includes(receivedType.toLowerCase()) ) {
+    log('*************************************************************');
+    log(`Provide one of the valid options: ${validTypes.join(', ')}`);
+    log('*************************************************************');
+    return;
+  }
+
+  log(`\n********** Polling type "${receivedType}" ************\n`);
+
+  if (receivedType === 'promise') {
+    await receivePromise();
+    pollForMessages();
+  } else if (receivedType === 'callback') {
+    receiveCallback(() => {
+      pollForMessages();
+    });
+  } else {
+    log(`End with command ${receivedType}`);
+  }
+}
+
+pollForMessages();

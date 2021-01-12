@@ -81,7 +81,7 @@ app.post('/send-promise2', async (_req, res) => {
   };
 
   try {
-    const awsRequest = sqs.sendMessage(sendParams, ()=>{});
+    const awsRequest = sqs.sendMessage(sendParams);
     const data = await awsRequest.promise();
     res.send({
       status: 'OK',

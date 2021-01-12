@@ -1,7 +1,6 @@
 'use strict';
 
 const shimmer = require('shimmer');
-
 const cls = require('../../../cls');
 const {
   traceIdHeaderNameLowerCase,
