@@ -13,11 +13,22 @@ const {
 const requireHook = require('../../../../util/requireHook');
 const tracingUtil = require('../../../tracingUtil');
 
-// const logger = require('../../../../logger').getLogger('tracing/sqs', newLogger => {
-//   logger = newLogger;
-// });
+const queueNameRE = /\/(\w+)$/;
+
+const logger = require('../../../../logger').getLogger('tracing/sqs', newLogger => {
+  logger = newLogger;
+});
 
 let isActive = false;
+
+function getQueueName(queueURL) {
+  const match = queueURL.match(queueNameRE);
+
+  if (match && match.length >= 2) {
+    return match[1];
+  }
+  return '';
+}
 
 function finishSpan(err, data, span) {
   if (err) {
@@ -75,6 +86,7 @@ function shimSendMessage(original) {
 
 function instrumentedSendMessage(ctx, originalSendMessage, originalArgs) {
   /**
+   * sendMessage argument:
   * {
   *   MessageBody: 'message sent via promise',
   *   QueueUrl: 'https://sqs.us-east-2.amazonaws.com/410797082306/node_sensor'
@@ -97,11 +109,8 @@ function instrumentedSendMessage(ctx, originalSendMessage, originalArgs) {
     span.ts = Date.now();
     span.stack = tracingUtil.getStackTrace(instrumentedSendMessage);
     span.data.sqs = {
-      fakeAttribute: `test ${Math.random() * 1e5}`
-      // op: 'publish',
-      // projid: ctx.topic && (ctx.topic.parent || ctx.topic.pubsub || {}).projectId,
-      // top: unqualifyName(ctx.topic && ctx.topic.name),
-      // messageId: message.id
+      sort: '',
+      queue: getQueueName(originalArgs[0].QueueUrl)
     };
 
     propagateTraceContext(attributes, span);
@@ -120,8 +129,6 @@ function instrumentedSendMessage(ctx, originalSendMessage, originalArgs) {
       awsRequest.promise = cls.ns.bind(awsRequest.promise);
     }
 
-    // cls.ns.bindEmitter(awsRequest);
-
     // this is what the promise actually does
     awsRequest.on('complete', function onComplete(resp) {
       if (resp && resp.error) {
@@ -137,24 +144,71 @@ function instrumentedSendMessage(ctx, originalSendMessage, originalArgs) {
   });
 }
 
-function shimReceiveMessage(original) {
+function shimReceiveMessage(originalReceiveMessage) {
   return function () {
     if (isActive) {
+      const parentSpan = cls.getCurrentSpan();
+      if (parentSpan) {
+        logger.warn(
+          // eslint-disable-next-line max-len
+          `Cannot start a AWS SQS entry span when another span is already active. Currently, the following span is active: ${JSON.stringify(
+            parentSpan
+          )}`
+        );
+        return originalReceiveMessage.apply(this, arguments);
+      }
+
       const originalArgs = new Array(arguments.length);
       for (let i = 0; i < originalArgs.length; i++) {
         originalArgs[i] = arguments[i];
       }
-      return instrumentReceiveMessage(this, original, originalArgs);
+      return instrumentReceiveMessage(this, originalReceiveMessage, originalArgs);
     }
 
-    return original.apply(this, arguments);
+    return originalReceiveMessage.apply(this, arguments);
   };
 }
 
 function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
-  const res = originalReceiveMessage.apply(ctx, originalArgs);
-  // console.log('*** receiveMessage was called with ', originalArgs);
-  return res;
+  console.log('**** receive message called with', originalArgs);
+
+  const attributes = Object.assign({}, originalArgs[0]);
+
+  return cls.ns.runAndReturn(() => {
+    if (tracingUtil.readAttribCaseInsensitive(attributes, traceLevelHeaderNameLowerCase) === '0') {
+      cls.setTracingLevel('0');
+      return originalReceiveMessage.apply(ctx, originalArgs);
+    }
+
+    // is callback case
+    const originalCallback = originalArgs[1];
+    if (typeof originalCallback === 'function') {
+      originalArgs[1] = cls.ns.bind(function(err, messageData) {
+        console.log('err', err, 'data', messageData);
+        const span = cls.startSpan('sqs', ENTRY);
+        span.ts = Date.now();
+        span.stack = tracingUtil.getStackTrace(instrumentedSendMessage);
+        span.data.sqs = {
+          sort: '',
+          queue: getQueueName(originalArgs[0].QueueUrl)
+        };
+
+        propagateTraceContext(attributes, span);
+
+        if (err || (messageData && messageData.Messages && messageData.Messages.length > 0)) {
+          finishSpan(err, messageData, span);
+        } else {
+          console.log('*************** NO MESSAGE, NO TRACE');
+        }
+
+        originalCallback.apply(this, arguments);
+      });
+    }
+
+    const res = originalReceiveMessage.apply(ctx, originalArgs);
+
+    return res;
+  });
 }
 
 function instrumentSQS(AWS) {
