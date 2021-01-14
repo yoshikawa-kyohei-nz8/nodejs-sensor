@@ -74,9 +74,10 @@ app.post('/send-promise', async (_req, res) => {
 });
 
 
-app.post('/send-promise2', async (_req, res) => {
+app.post('/send-promise2', async (req, res) => {
+  const msg = req.query.msg;
   const sendParams = {
-    MessageBody: 'message sent via promise 2',
+    MessageBody: `message sent via promise 2: ${msg || 'no message set'}`,
     QueueUrl: queueURL
   };
 

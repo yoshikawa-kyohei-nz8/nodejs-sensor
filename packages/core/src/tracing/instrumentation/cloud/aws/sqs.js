@@ -109,7 +109,7 @@ function instrumentedSendMessage(ctx, originalSendMessage, originalArgs) {
     span.ts = Date.now();
     span.stack = tracingUtil.getStackTrace(instrumentedSendMessage);
     span.data.sqs = {
-      sort: '',
+      sort: 'publish',
       queue: getQueueName(originalArgs[0].QueueUrl)
     };
 
@@ -170,36 +170,36 @@ function shimReceiveMessage(originalReceiveMessage) {
 }
 
 function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
-  // console.log('**** receive message called with', originalArgs);
-
-  const attributes = Object.assign({}, originalArgs[0]);
-
   return cls.ns.runAndReturn(() => {
-    if (tracingUtil.readAttribCaseInsensitive(attributes, traceLevelHeaderNameLowerCase) === '0') {
-      cls.setTracingLevel('0');
-      return originalReceiveMessage.apply(ctx, originalArgs);
-    }
-
-    // is callback case
+    // callback use case
     const originalCallback = originalArgs[1];
     if (typeof originalCallback === 'function') {
       originalArgs[1] = cls.ns.bind(function(err, messageData) {
-        // console.log('err', err, 'data', messageData);
-        const span = cls.startSpan('sqs', ENTRY);
+        const attributes = Object.assign({}, originalArgs[0]);
+
+        if (tracingUtil.readAttribCaseInsensitive(attributes, traceLevelHeaderNameLowerCase) === '0') {
+          cls.setTracingLevel('0');
+          return originalReceiveMessage.apply(ctx, originalArgs);
+        }
+
+        const span = cls.startSpan(
+          'sqs',
+          ENTRY,
+          tracingUtil.readAttribCaseInsensitive(attributes, traceIdHeaderNameLowerCase),
+          tracingUtil.readAttribCaseInsensitive(attributes, spanIdHeaderNameLowerCase)
+        );
         span.ts = Date.now();
         span.stack = tracingUtil.getStackTrace(instrumentedSendMessage);
         span.data.sqs = {
-          sort: '',
+          sort: 'consume',
           queue: getQueueName(originalArgs[0].QueueUrl)
         };
 
         propagateTraceContext(attributes, span);
 
         if (err || (messageData && messageData.Messages && messageData.Messages.length > 0)) {
-          // console.log('got message, will report span to agent');
           finishSpan(err, messageData, span);
         } else {
-          // console.log('*************** NO MESSAGE, NO TRACE');
           span.cancel();
         }
 
