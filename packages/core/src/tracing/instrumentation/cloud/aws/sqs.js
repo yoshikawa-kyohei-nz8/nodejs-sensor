@@ -170,7 +170,7 @@ function shimReceiveMessage(originalReceiveMessage) {
 }
 
 function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
-  console.log('**** receive message called with', originalArgs);
+  // console.log('**** receive message called with', originalArgs);
 
   const attributes = Object.assign({}, originalArgs[0]);
 
@@ -184,7 +184,7 @@ function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
     const originalCallback = originalArgs[1];
     if (typeof originalCallback === 'function') {
       originalArgs[1] = cls.ns.bind(function(err, messageData) {
-        console.log('err', err, 'data', messageData);
+        // console.log('err', err, 'data', messageData);
         const span = cls.startSpan('sqs', ENTRY);
         span.ts = Date.now();
         span.stack = tracingUtil.getStackTrace(instrumentedSendMessage);
@@ -196,9 +196,11 @@ function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
         propagateTraceContext(attributes, span);
 
         if (err || (messageData && messageData.Messages && messageData.Messages.length > 0)) {
+          // console.log('got message, will report span to agent');
           finishSpan(err, messageData, span);
         } else {
-          console.log('*************** NO MESSAGE, NO TRACE');
+          // console.log('*************** NO MESSAGE, NO TRACE');
+          span.cancel();
         }
 
         originalCallback.apply(this, arguments);
