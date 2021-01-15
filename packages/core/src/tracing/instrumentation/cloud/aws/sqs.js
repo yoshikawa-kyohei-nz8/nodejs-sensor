@@ -171,7 +171,7 @@ function shimReceiveMessage(originalReceiveMessage) {
 
 function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
   return cls.ns.runAndReturn(() => {
-    let span;
+    let span = null;
     let attributes;
     // callback use case
     const originalCallback = originalArgs[1];
@@ -195,7 +195,6 @@ function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
         originalCallback.apply(this, arguments);
       });
     }
-
 
     span = cls.startSpan(
       'sqs',
