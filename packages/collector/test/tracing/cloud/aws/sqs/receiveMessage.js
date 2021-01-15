@@ -16,7 +16,7 @@ const receiveParams = {
   ],
   QueueUrl: queueURL,
   VisibilityTimeout: 20,
-  WaitTimeSeconds: 20
+  WaitTimeSeconds: 10
 };
 
 function log() {

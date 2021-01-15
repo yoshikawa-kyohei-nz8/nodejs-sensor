@@ -42,6 +42,18 @@ exports.updateConfig = function updateConfig(config) {
   extraHttpHeadersToCapture = config.tracing.http.extraHttpHeadersToCapture;
 };
 
+/**
+ * @param {InstanaSpan} span The span to be evaluated if it should be traced or not.
+ * @return {boolean} Whether or not the span should be instrumented.
+ */
+function shouldBeBypassed(span) {
+  if (span && span.n === 'sqs') {
+    return true;
+  }
+
+  return false;
+}
+
 function instrument(coreModule, forceHttps) {
   const originalRequest = coreModule.request;
   coreModule.request = function request() {
@@ -84,7 +96,7 @@ function instrument(coreModule, forceHttps) {
     let w3cTraceContext = cls.getW3cTraceContext();
     const parentSpan = cls.getCurrentSpan() || cls.getReducedSpan();
 
-    if (!isActive || !parentSpan || constants.isExitSpan(parentSpan)) {
+    if (!isActive || !parentSpan || constants.isExitSpan(parentSpan) || shouldBeBypassed(parentSpan)) {
       let traceLevelHeaderHasBeenAdded = false;
       if (cls.tracingSuppressed()) {
         traceLevelHeaderHasBeenAdded = tryToAddTraceLevelAddHeaderToOpts(options, '0', w3cTraceContext);

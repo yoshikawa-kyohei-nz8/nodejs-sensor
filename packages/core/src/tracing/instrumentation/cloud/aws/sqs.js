@@ -171,29 +171,18 @@ function shimReceiveMessage(originalReceiveMessage) {
 
 function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
   return cls.ns.runAndReturn(() => {
+    let span;
+    let attributes;
     // callback use case
     const originalCallback = originalArgs[1];
     if (typeof originalCallback === 'function') {
       originalArgs[1] = cls.ns.bind(function(err, messageData) {
-        const attributes = Object.assign({}, originalArgs[0]);
+        attributes = Object.assign({}, originalArgs[0]);
 
         if (tracingUtil.readAttribCaseInsensitive(attributes, traceLevelHeaderNameLowerCase) === '0') {
           cls.setTracingLevel('0');
           return originalReceiveMessage.apply(ctx, originalArgs);
         }
-
-        const span = cls.startSpan(
-          'sqs',
-          ENTRY,
-          tracingUtil.readAttribCaseInsensitive(attributes, traceIdHeaderNameLowerCase),
-          tracingUtil.readAttribCaseInsensitive(attributes, spanIdHeaderNameLowerCase)
-        );
-        span.ts = Date.now();
-        span.stack = tracingUtil.getStackTrace(instrumentedSendMessage);
-        span.data.sqs = {
-          sort: 'consume',
-          queue: getQueueName(originalArgs[0].QueueUrl)
-        };
 
         propagateTraceContext(attributes, span);
 
@@ -206,6 +195,20 @@ function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
         originalCallback.apply(this, arguments);
       });
     }
+
+
+    span = cls.startSpan(
+      'sqs',
+      ENTRY
+      // tracingUtil.readAttribCaseInsensitive(attributes, traceIdHeaderNameLowerCase),
+      // tracingUtil.readAttribCaseInsensitive(attributes, spanIdHeaderNameLowerCase)
+    );
+    span.ts = Date.now();
+    span.stack = tracingUtil.getStackTrace(instrumentedSendMessage);
+    span.data.sqs = {
+      sort: 'consume',
+      queue: getQueueName(originalArgs[0].QueueUrl)
+    };
 
     const res = originalReceiveMessage.apply(ctx, originalArgs);
 
