@@ -78,7 +78,13 @@ app.post('/send-promise2', async (req, res) => {
   const msg = req.query.msg;
   const sendParams = {
     MessageBody: `message sent via promise 2: ${msg || 'no message set'}`,
-    QueueUrl: queueURL
+    QueueUrl: queueURL,
+    MessageAttributes: {
+      MyCustomAttrib: {
+        DataType: 'String',
+        StringValue: 'my custom value'
+      }
+    }
   };
 
   try {

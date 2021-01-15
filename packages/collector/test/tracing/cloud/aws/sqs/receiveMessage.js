@@ -72,7 +72,7 @@ function receiveCallback(cb) {
         }
       });
     } else {
-      log('No messages found. Restart the polling');
+      // log('No messages found. Restart the polling');
       cb();
     }
   });

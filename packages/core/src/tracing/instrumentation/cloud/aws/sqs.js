@@ -57,16 +57,32 @@ function propagateSuppression(attributes) {
   if (!attributes || typeof attributes !== 'object') {
     return;
   }
-  attributes[traceLevelHeaderNameLowerCase] = '0';
+
+  attributes[traceLevelHeaderNameLowerCase] = {
+    DataType: 'String',
+    StringValue: '0'
+  };
 }
 
 function propagateTraceContext(attributes, span) {
   if (!attributes || typeof attributes !== 'object') {
     return;
   }
-  attributes[traceIdHeaderNameLowerCase] = span.t;
-  attributes[spanIdHeaderNameLowerCase] = span.s;
-  attributes[traceLevelHeaderNameLowerCase] = '1';
+
+  attributes[traceIdHeaderNameLowerCase] = {
+    DataType: 'String',
+    StringValue: span.t
+  };
+
+  attributes[spanIdHeaderNameLowerCase] = {
+    DataType: 'String',
+    StringValue: span.s
+  };
+
+  attributes[traceLevelHeaderNameLowerCase] = {
+    DataType: 'String',
+    StringValue: '1'
+  };
 }
 
 function shimSendMessage(original) {
@@ -86,13 +102,22 @@ function shimSendMessage(original) {
 
 function instrumentedSendMessage(ctx, originalSendMessage, originalArgs) {
   /**
-   * sendMessage argument:
-  * {
-  *   MessageBody: 'message sent via promise',
-  *   QueueUrl: 'https://sqs.us-east-2.amazonaws.com/410797082306/node_sensor'
-  * }
+   * Send Message Attribues format
+   * {
+   *    ...
+   *    MessageAttributes: {
+   *      CustomAttribute: {
+   *        DataType: 'String',
+   *        StringValue: 'Custom Value'
+   *      }
+   *    }
+   * }
    */
-  const attributes = Object.assign({}, originalArgs[0]);
+  let attributes = originalArgs[0].MessageAttributes;
+
+  if (!attributes) {
+    attributes = originalArgs[0].MessageAttributes = {};
+  }
 
   if (cls.tracingSuppressed()) {
     propagateSuppression(attributes);
@@ -130,13 +155,13 @@ function instrumentedSendMessage(ctx, originalSendMessage, originalArgs) {
     }
 
     // this is what the promise actually does
-    awsRequest.on('complete', function onComplete(resp) {
-      if (resp && resp.error) {
-        finishSpan(resp.error, null, span);
-        throw resp.error;
+    awsRequest.on('complete', function onComplete(data) {
+      if (data && data.error) {
+        finishSpan(data.error, null, span);
+        throw data.error;
       } else {
-        finishSpan(null, resp, span);
-        return resp;
+        finishSpan(null, data, span);
+        return data;
       }
     });
 
@@ -169,25 +194,53 @@ function shimReceiveMessage(originalReceiveMessage) {
   };
 }
 
+/**
+ * Flattens the AWS SQS MessageAttribute format into a basic object structure.
+ *
+ * @param {SQS MessageAttributes} sqsAttributes The AWS SQS MessageAttribute object
+ * @returns {Object} An object in the format { attribute1: value1, attribute2: value2... }
+ */
+function convertAttributesFromSQS(sqsAttributes) {
+  const attributes = {};
+
+  const keys = Object.keys(sqsAttributes);
+
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+
+    if (sqsAttributes[key].DataType === 'String') {
+      attributes[key] = sqsAttributes[key].StringValue;
+    }
+  }
+
+  return attributes;
+}
+
 function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
   return cls.ns.runAndReturn(() => {
     let span = null;
     let attributes;
+
     // callback use case
     const originalCallback = originalArgs[1];
     if (typeof originalCallback === 'function') {
-      originalArgs[1] = cls.ns.bind(function(err, messageData) {
-        attributes = Object.assign({}, originalArgs[0]);
+      originalArgs[1] = cls.ns.bind(function(err, data) {
+        if (err || (data && data.Messages && data.Messages.length > 0)) {
+          // TODO: Loop through messages
+          attributes = convertAttributesFromSQS(data.Messages[0].MessageAttributes);
 
-        if (tracingUtil.readAttribCaseInsensitive(attributes, traceLevelHeaderNameLowerCase) === '0') {
-          cls.setTracingLevel('0');
-          return originalReceiveMessage.apply(ctx, originalArgs);
-        }
+          span.t = tracingUtil.readAttribCaseInsensitive(attributes, traceIdHeaderNameLowerCase);
+          span.p = tracingUtil.readAttribCaseInsensitive(attributes, spanIdHeaderNameLowerCase);
+          span.ts = Date.now();
 
-        propagateTraceContext(attributes, span);
+          if (tracingUtil.readAttribCaseInsensitive(attributes, traceLevelHeaderNameLowerCase) === '0') {
+            cls.setTracingLevel('0');
+            return originalReceiveMessage.apply(ctx, originalArgs);
+          }
 
-        if (err || (messageData && messageData.Messages && messageData.Messages.length > 0)) {
-          finishSpan(err, messageData, span);
+          propagateTraceContext(attributes, span);
+
+          finishSpan(err, data, span);
         } else {
           span.cancel();
         }
@@ -196,22 +249,15 @@ function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
       });
     }
 
-    span = cls.startSpan(
-      'sqs',
-      ENTRY
-      // tracingUtil.readAttribCaseInsensitive(attributes, traceIdHeaderNameLowerCase),
-      // tracingUtil.readAttribCaseInsensitive(attributes, spanIdHeaderNameLowerCase)
-    );
-    span.ts = Date.now();
+    span = cls.startSpan('sqs', ENTRY);
+    // span.ts = Date.now();
     span.stack = tracingUtil.getStackTrace(instrumentedSendMessage);
     span.data.sqs = {
       sort: 'consume',
       queue: getQueueName(originalArgs[0].QueueUrl)
     };
 
-    const res = originalReceiveMessage.apply(ctx, originalArgs);
-
-    return res;
+    return originalReceiveMessage.apply(ctx, originalArgs);
   });
 }
 
