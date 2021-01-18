@@ -240,12 +240,28 @@ function instrumentReceiveMessage(ctx, originalReceiveMessage, originalArgs) {
 
           propagateTraceContext(attributes, span);
 
-          finishSpan(err, data, span);
+          try {
+            console.log('+++++++++++++ GOES HERE: try');
+            return originalCallback.apply(this, arguments);
+          } finally {
+            console.log('+++++++++++++ GOES HERE: finally');
+            setImmediate(() => {
+              // Client code is expected to end the span manually, end it automatically in case client code doesn't.
+              // Child exit spans won't be captured, but at least the PubSub entry span is there.
+              span.d = Date.now() - span.ts;
+              span.transmit();
+              // finishSpan(err, data, span);
+            });
+          }
+
+          // finishSpan(err, data, span);
+          // console.log('************ SHOULD HAVE FINISHED');
         } else {
           span.cancel();
+          return originalCallback.apply(this, arguments);
         }
 
-        originalCallback.apply(this, arguments);
+        // originalCallback.apply(this, arguments);
       });
     }
 
